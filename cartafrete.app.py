@@ -23,6 +23,10 @@ def check_password():
         # Verifica se o usuário existe e se a senha está correta
         if st.session_state["username"] in USUARIOS_CADASTRADOS and st.session_state["password"] == USUARIOS_CADASTRADOS[st.session_state["username"]]:
             st.session_state["password_correct"] = True
+            
+            # CORREÇÃO: Salva o nome em uma variável que não será apagada quando o campo sumir
+            st.session_state["usuario_logado"] = st.session_state["username"] 
+            
             del st.session_state["password"]  # Apaga a senha da memória por segurança
         else:
             st.session_state["password_correct"] = False
@@ -57,15 +61,15 @@ def check_password():
 if not check_password():
     st.stop()
 
-# Adiciona um botão de Sair na barra lateral
-st.sidebar.success(f"Logado como: {st.session_state['username']}")
+# Adiciona um botão de Sair na barra lateral usando a nova variável salva
+st.sidebar.success(f"Logado como: {st.session_state['usuario_logado']}")
 if st.sidebar.button("Sair"):
     del st.session_state["password_correct"]
+    del st.session_state["usuario_logado"]
     st.rerun()
 
-
 # ==========================================
-# 2. SISTEMA DO VALIDADOR (SEU CÓDIGO ORIGINAL)
+# 2. SISTEMA DO VALIDADOR (COMEÇA AQUI O RESTO DO SEU CÓDIGO)
 # ==========================================
 
 def extrair_texto_pdf(arquivo_upload):
