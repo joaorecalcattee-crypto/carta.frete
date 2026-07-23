@@ -108,7 +108,7 @@ def processar_cartas_frete(texto):
         
     return pd.DataFrame(cartas)
 
-st.title("📊 Validador Fiscal: Livro Diário vs. Cartas Frete")
+st.title("📊 Conferencia Contabil: Livro Diário vs. Cartas Frete")
 st.write("Auditoria de Partidas Dobradas, Valores e Prestadores.")
 
 col1, col2 = st.columns(2)
