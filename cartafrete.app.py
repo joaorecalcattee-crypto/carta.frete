@@ -4,7 +4,7 @@ import re
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Conferencia Diario - Cartas Frete", layout="wide")
+st.set_page_config(page_title="Validador Fiscal - Cartas Frete", layout="wide")
 
 def extrair_texto_pdf(arquivo_upload):
     texto_completo = ""
@@ -18,44 +18,76 @@ def extrair_texto_pdf(arquivo_upload):
         st.error(f"Erro ao ler PDF: {e}")
     return texto_completo
 
-def limpar_valor(valor_str):
+def limpar_valor_pdf(valor_str):
     if not valor_str: return 0.0
     return float(valor_str.replace('.', '').replace(',', '.'))
 
+def limpar_valor_excel(valor_str):
+    valor_str = str(valor_str).strip()
+    if valor_str.lower() in ['nan', 'none', ''] or not valor_str:
+        return 0.0
+    try:
+        # Limpeza do formato brasileiro (ex: "26.127,64" vira "26127.64")
+        return float(valor_str.replace('.', '').replace(',', '.'))
+    except:
+        return 0.0
+
 def processar_livro_diario_excel(arquivo_excel):
     try:
-        # Lê o Excel sem focar em cabeçalhos, para varrer todas as células
-        df = pd.read_excel(arquivo_excel, header=None)
+        df = pd.read_excel(arquivo_excel)
     except Exception as e:
         st.error(f"Erro ao ler Excel: {e}")
         return pd.DataFrame()
 
-    lancamentos = []
-    
+    # Identifica dinamicamente as colunas
+    col_hist = next((col for col in df.columns if 'Hist' in str(col)), None)
+    col_debito = next((col for col in df.columns if 'Debito' in str(col)), None)
+    col_credito = next((col for col in df.columns if 'Credito' in str(col)), None)
+    col_conta = next((col for col in df.columns if 'Conta' in str(col)), None)
+
+    if not col_hist or not col_debito or not col_credito or not col_conta:
+        st.error("As colunas de Histórico, Débito, Crédito ou Conta Contábil não foram localizadas.")
+        return pd.DataFrame()
+
+    # Dicionário para agrupar os lançamentos por título
+    lancamentos_agrupados = {}
+
     for index, row in df.iterrows():
-        # Junta o texto da linha inteira para achar o histórico "PAGO CF"
-        linha_str = ' '.join([str(val) for val in row if pd.notna(val)])
-        
-        match_cf = re.search(r'PAGO\s*C[FE]\s*(\d+)', linha_str, re.IGNORECASE)
+        historico = str(row[col_hist])
+        match_cf = re.search(r'PAGO\s*C[FE]\s*(\d+)', historico, re.IGNORECASE)
         
         if match_cf:
             numero_titulo = match_cf.group(1)
+            conta = str(row[col_conta]).replace('.', '')
             
-            # Encontra automaticamente as colunas que possuem valores financeiros (Débito/Crédito)
-            valores_numericos = [val for val in row if isinstance(val, (int, float))]
+            if numero_titulo not in lancamentos_agrupados:
+                lancamentos_agrupados[numero_titulo] = {
+                    'debito_frete': 0.0,
+                    'tem_credito_banco': False
+                }
             
-            if valores_numericos:
-                # Captura o maior valor absoluto daquela linha
-                valor = max([abs(v) for v in valores_numericos])
-            else:
-                valor = 0.0
-                
-            lancamentos.append({
-                'Número do Título': numero_titulo,
-                'Valor (Diário)': float(valor)
-            })
+            # Valida Perna 1: DÉBITO na conta do frete (211010300001)
+            if conta.startswith('211010300001'):
+                valor_deb = limpar_valor_excel(row[col_debito])
+                if valor_deb > 0:
+                    lancamentos_agrupados[numero_titulo]['debito_frete'] += valor_deb
+                    
+            # Valida Perna 2: CRÉDITO em conta de banco sintética (11102)
+            if conta.startswith('11102'):
+                valor_cred = limpar_valor_excel(row[col_credito])
+                if valor_cred > 0:
+                    lancamentos_agrupados[numero_titulo]['tem_credito_banco'] = True
+
+    # Transforma o dicionário agrupado na tabela final do Python
+    lancamentos_finais = []
+    for titulo, dados in lancamentos_agrupados.items():
+        lancamentos_finais.append({
+            'Número do Título': titulo,
+            'Valor (Diário)': dados['debito_frete'],
+            'Estrutura OK': dados['tem_credito_banco'] and (dados['debito_frete'] > 0)
+        })
             
-    return pd.DataFrame(lancamentos).drop_duplicates('Número do Título')
+    return pd.DataFrame(lancamentos_finais)
 
 def processar_cartas_frete(texto):
     cartas = []
@@ -68,7 +100,7 @@ def processar_cartas_frete(texto):
         numero_titulo = match_numero.group(1)
         
         match_valor = re.search(r'SALDO A RECEBER:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
-        valor_liquido = limpar_valor(match_valor.group(1)) if match_valor else 0.0
+        valor_liquido = limpar_valor_pdf(match_valor.group(1)) if match_valor else 0.0
         
         cartas.append({
             'Número do Título': numero_titulo,
@@ -77,43 +109,44 @@ def processar_cartas_frete(texto):
         
     return pd.DataFrame(cartas)
 
-st.title("📊 Conferencia Contábil: Livro Diário vs. Cartas Frete")
-st.write("Faça o upload do Livro Diário (Excel) e das Cartas Frete (PDF).")
+st.title("📊 Validador Fiscal: Livro Diário vs. Cartas Frete")
+st.write("Auditoria de Partidas Dobradas e Conciliação de Valores.")
 
 col1, col2 = st.columns(2)
 with col1:
-    # Atualizado para aceitar formatos do Excel
     arquivo_diario = st.file_uploader("Upload do Livro Diário (Excel)", type=['xlsx', 'xls'])
 with col2:
     arquivo_cartas = st.file_uploader("Upload das Cartas Frete (PDF)", type=['pdf'])
 
 if arquivo_diario and arquivo_cartas:
-    if st.button("Iniciar Conferência", type="primary"):
-        with st.spinner("Cruzando dados fiscais..."):
+    if st.button("Iniciar Auditoria", type="primary"):
+        with st.spinner("Realizando enfrentamento contábil..."):
             
             df_diario = processar_livro_diario_excel(arquivo_diario)
-            
             texto_cartas = extrair_texto_pdf(arquivo_cartas)
             df_cartas = processar_cartas_frete(texto_cartas)
             
             if df_diario.empty:
-                st.error("Não foi possível localizar lançamentos 'PAGO CF' no arquivo Excel enviado.")
+                st.error("Nenhum lançamento válido encontrado no Excel do Livro Diário.")
             elif df_cartas.empty:
-                st.error("Falha ao extrair dados dos PDFs das Cartas Frete.")
+                st.error("Nenhuma Carta Frete identificada nos PDFs.")
             else:
                 df_cruzamento = pd.merge(df_cartas, df_diario, on='Número do Título', how='outer')
                 
                 resultados = []
                 for index, row in df_cruzamento.iterrows():
                     titulo = row['Número do Título']
+                    
                     if pd.isna(row['Valor (Diário)']):
                         status = 'Erro: Presente na Carta Frete, ausente no Diário'
                     elif pd.isna(row['Valor (Carta Frete)']):
                         status = 'Erro: Presente no Diário, Carta Frete ausente'
+                    elif not row['Estrutura OK']:
+                        status = 'ERRO CONTÁBIL: Falta Débito (21101) ou Crédito (Banco 11102)'
                     elif abs(row['Valor (Carta Frete)'] - row['Valor (Diário)']) > 0.01:
                         status = 'Divergência de Valor'
                     else:
-                        status = 'OK: Lançamento validado'
+                        status = 'OK: Lançamento validado (Partidas Dobradas Corretas)'
                         
                     resultados.append({
                         'Título': titulo,
@@ -125,22 +158,22 @@ if arquivo_diario and arquivo_cartas:
                 df_resultado = pd.DataFrame(resultados)
                 
                 st.subheader("Resultado da Validação")
-                erros = df_resultado[df_resultado['Status'] != 'OK: Lançamento validado']
-                sucessos = df_resultado[df_resultado['Status'] == 'OK: Lançamento validado']
+                erros = df_resultado[df_resultado['Status'] != 'OK: Lançamento validado (Partidas Dobradas Corretas)']
+                sucessos = df_resultado[df_resultado['Status'] == 'OK: Lançamento validado (Partidas Dobradas Corretas)']
                 
                 if not erros.empty:
-                    st.warning(f"Foram encontradas {len(erros)} inconsistências.")
+                    st.warning(f"Atenção: Encontramos {len(erros)} inconsistência(s) que precisam de revisão.")
                     st.dataframe(erros, use_container_width=True)
                 else:
-                    st.success("Conferência concluída! Nenhuma divergência encontrada.")
+                    st.success("Auditoria perfeita! Todos os valores e contas contábeis estão batendo.")
                 
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    df_resultado.to_excel(writer, index=False, sheet_name='Conciliacao')
+                    df_resultado.to_excel(writer, index=False, sheet_name='Auditoria')
                 
                 st.download_button(
-                    label="Baixar Relatório (Excel)",
+                    label="Baixar Relatório Completo (Excel)",
                     data=buffer.getvalue(),
-                    file_name="relatorio_conferencia.xlsx",
+                    file_name="relatorio_auditoria_fretes.xlsx",
                     mime="application/vnd.ms-excel"
                 )
