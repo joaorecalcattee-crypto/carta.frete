@@ -4,7 +4,7 @@ import re
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Validador Fiscal - Cartas Frete", layout="wide")
+st.set_page_config(page_title="Conferencia Contabil - Cartas Frete", layout="wide")
 
 def extrair_texto_pdf(arquivo_upload):
     texto_completo = ""
