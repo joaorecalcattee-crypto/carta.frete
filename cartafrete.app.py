@@ -24,34 +24,26 @@ def limpar_valor(valor_str):
 
 def processar_livro_diario(texto):
     lancamentos = []
-    linhas = texto.split('\n')
     
-    for i, linha in enumerate(linhas):
-        # Regex mais flexível (ignora maiúsculas/minúsculas, acentos e espaços extras)
-        match_cf = re.search(r'PAGO\s*C[FE]\s*(\d+)', linha, re.IGNORECASE)
+    # Busca todas as ocorrências de PAGO CF ou PAGO CE em todo o texto contínuo
+    matches = re.finditer(r'PAGO\s*C[FE]\s*(\d+)', texto, re.IGNORECASE)
+    
+    for match in matches:
+        numero_titulo = match.group(1)
         
-        if match_cf:
-            numero_titulo = match_cf.group(1)
+        # Isola os próximos 150 caracteres logo após o número do título
+        trecho_frente = texto[match.end():match.end()+150]
+        
+        # Busca o primeiro valor financeiro (padrão de milhares e decimais) nesse trecho
+        match_valor = re.search(r'(\d{1,3}(?:\.\d{3})*,\d{2})', trecho_frente)
+        valor = limpar_valor(match_valor.group(1)) if match_valor else 0.0
+        
+        lancamentos.append({
+            'Número do Título': numero_titulo,
+            'Valor (Diário)': valor
+        })
             
-            # Ampliamos a busca do valor para a linha atual, a anterior e a próxima
-            linhas_busca = [linha]
-            if i < len(linhas) - 1: linhas_busca.append(linhas[i+1])
-            if i > 0: linhas_busca.append(linhas[i-1])
-            
-            valor = 0.0
-            for linha_b in linhas_busca:
-                match_valor = re.search(r'(\d{1,3}(?:\.\d{3})*,\d{2})', linha_b)
-                if match_valor:
-                    valor = limpar_valor(match_valor.group(1))
-                    break
-                    
-            prestador = re.sub(r'PAGO\s*C[FE]\s*\d+', '', linha, flags=re.IGNORECASE).strip()
-            lancamentos.append({
-                'Número do Título': numero_titulo,
-                'Prestador (Diário)': prestador,
-                'Valor (Diário)': valor
-            })
-            
+    return pd.DataFrame(lancamentos).drop_duplicates('Número do Título')
     return pd.DataFrame(lancamentos).drop_duplicates('Número do Título')
 
 def processar_cartas_frete(texto):
