@@ -4,7 +4,7 @@ import re
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Conferencia Contabil - Cartas Frete", layout="wide")
+st.set_page_config(page_title="Conferencia Contábil - Cartas Frete", layout="wide")
 
 def extrair_texto_pdf(arquivo_upload):
     texto_completo = ""
@@ -51,17 +51,25 @@ def processar_livro_diario_excel(arquivo_excel):
 
     for index, row in df.iterrows():
         historico = str(row[col_hist])
-        match_cf = re.search(r'PAGO\s*C[FE]\s*(\d+)', historico, re.IGNORECASE)
+        
+        # Novo Regex: Captura o número do título e tudo que vier depois do hífen (Nome do Prestador)
+        match_cf = re.search(r'PAGO\s*C[FE]\s*(\d+)(?:\s*-\s*(.+))?', historico, re.IGNORECASE)
         
         if match_cf:
             numero_titulo = match_cf.group(1)
+            prestador_excel = match_cf.group(2).strip() if match_cf.group(2) else ""
             conta = str(row[col_conta]).replace('.', '')
             
             if numero_titulo not in lancamentos_agrupados:
                 lancamentos_agrupados[numero_titulo] = {
                     'debito_frete': 0.0,
-                    'tem_credito_banco': False
+                    'tem_credito_banco': False,
+                    'prestador': prestador_excel
                 }
+            
+            # Atualiza o nome do prestador se estiver vazio e achar em outra linha
+            if not lancamentos_agrupados[numero_titulo]['prestador'] and prestador_excel:
+                lancamentos_agrupados[numero_titulo]['prestador'] = prestador_excel
             
             if conta.startswith('211010300001'):
                 valor_deb = limpar_valor_excel(row[col_debito])
@@ -77,6 +85,7 @@ def processar_livro_diario_excel(arquivo_excel):
     for titulo, dados in lancamentos_agrupados.items():
         lancamentos_finais.append({
             'Número do Título': titulo,
+            'Prestador_Diario': dados['prestador'],
             'Valor (Diário)': dados['debito_frete'],
             'Estrutura OK': dados['tem_credito_banco'] and (dados['debito_frete'] > 0)
         })
@@ -93,22 +102,22 @@ def processar_cartas_frete(texto):
             continue
         numero_titulo = match_numero.group(1)
         
-        # Nova Extração: Nome do Prestador
-        match_prestador = re.search(r'CONTRATADO\s+NOME\s*:\s*([^\n]+)', bloco, re.IGNORECASE)
-        prestador = match_prestador.group(1).strip() if match_prestador else "NÃO IDENTIFICADO"
+        # Regex Agressivo: Ignora quebras de linha invisíveis entre CONTRATADO, NOME e os dois pontos (:)
+        match_prestador = re.search(r'CONTRATADO[\s\S]*?NOME[\s\S]*?:\s*([^\n]+)', bloco, re.IGNORECASE)
+        prestador_pdf = match_prestador.group(1).strip() if match_prestador else ""
         
         match_valor = re.search(r'SALDO A RECEBER:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
         valor_liquido = limpar_valor_pdf(match_valor.group(1)) if match_valor else 0.0
         
         cartas.append({
             'Número do Título': numero_titulo,
-            'Prestador': prestador,
+            'Prestador_Carta': prestador_pdf,
             'Valor (Carta Frete)': valor_liquido
         })
         
     return pd.DataFrame(cartas)
 
-st.title("📊 Conferencia Contabil: Livro Diário vs. Cartas Frete")
+st.title("📊 Conferencia Contábil: Livro Diário vs. Cartas Frete")
 st.write("Auditoria de Partidas Dobradas, Valores e Prestadores.")
 
 col1, col2 = st.columns(2)
@@ -135,7 +144,17 @@ if arquivo_diario and arquivo_cartas:
                 resultados = []
                 for index, row in df_cruzamento.iterrows():
                     titulo = row['Número do Título']
-                    prestador = row.get('Prestador', 'NÃO IDENTIFICADO (Falta Carta Frete)')
+                    
+                    # Lógica para usar o nome do Excel como preferência (mais limpo), ou o da Carta Frete como backup
+                    prestador_diario = str(row.get('Prestador_Diario', '')).strip()
+                    prestador_carta = str(row.get('Prestador_Carta', '')).strip()
+                    
+                    if prestador_diario and prestador_diario.lower() != 'nan':
+                        prestador = prestador_diario
+                    elif prestador_carta and prestador_carta.lower() != 'nan':
+                        prestador = prestador_carta
+                    else:
+                        prestador = 'NÃO IDENTIFICADO'
                     
                     if pd.isna(row['Valor (Diário)']):
                         status = 'Erro: Presente na Carta Frete, ausente no Diário'
