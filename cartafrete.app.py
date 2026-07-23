@@ -51,8 +51,6 @@ def processar_livro_diario_excel(arquivo_excel):
 
     for index, row in df.iterrows():
         historico = str(row[col_hist])
-        
-        # Novo Regex: Captura o número do título e tudo que vier depois do hífen (Nome do Prestador)
         match_cf = re.search(r'PAGO\s*C[FE]\s*(\d+)(?:\s*-\s*(.+))?', historico, re.IGNORECASE)
         
         if match_cf:
@@ -67,7 +65,6 @@ def processar_livro_diario_excel(arquivo_excel):
                     'prestador': prestador_excel
                 }
             
-            # Atualiza o nome do prestador se estiver vazio e achar em outra linha
             if not lancamentos_agrupados[numero_titulo]['prestador'] and prestador_excel:
                 lancamentos_agrupados[numero_titulo]['prestador'] = prestador_excel
             
@@ -102,23 +99,40 @@ def processar_cartas_frete(texto):
             continue
         numero_titulo = match_numero.group(1)
         
-        # Regex Agressivo: Ignora quebras de linha invisíveis entre CONTRATADO, NOME e os dois pontos (:)
         match_prestador = re.search(r'CONTRATADO[\s\S]*?NOME[\s\S]*?:\s*([^\n]+)', bloco, re.IGNORECASE)
         prestador_pdf = match_prestador.group(1).strip() if match_prestador else ""
         
-        match_valor = re.search(r'SALDO A RECEBER:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
-        valor_liquido = limpar_valor_pdf(match_valor.group(1)) if match_valor else 0.0
+        # Extração de todos os valores financeiros
+        match_bruto = re.search(r'VALOR BRUTO:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
+        valor_bruto = limpar_valor_pdf(match_bruto.group(1)) if match_bruto else 0.0
+        
+        match_inss = re.search(r'INSS:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
+        inss = limpar_valor_pdf(match_inss.group(1)) if match_inss else 0.0
+        
+        match_ir = re.search(r'IR:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
+        ir = limpar_valor_pdf(match_ir.group(1)) if match_ir else 0.0
+        
+        match_sest = re.search(r'SEST:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
+        sest = limpar_valor_pdf(match_sest.group(1)) if match_sest else 0.0
+        
+        match_saldo = re.search(r'SALDO A RECEBER:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
+        saldo_receber = limpar_valor_pdf(match_saldo.group(1)) if match_saldo else 0.0
         
         cartas.append({
             'Número do Título': numero_titulo,
             'Prestador_Carta': prestador_pdf,
-            'Valor (Carta Frete)': valor_liquido
+            'Valor Bruto (CF)': valor_bruto,
+            'Total Impostos (CF)': inss + ir + sest,
+            'INSS': inss,
+            'IR': ir,
+            'SEST': sest,
+            'Saldo a Receber (CF)': saldo_receber
         })
         
     return pd.DataFrame(cartas)
 
 st.title("📊 Conferencia Contábil: Livro Diário vs. Cartas Frete")
-st.write("Auditoria de Partidas Dobradas, Valores e Prestadores.")
+st.write("Auditoria de Partidas Dobradas, Valores, Impostos e Prestadores.")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -128,7 +142,7 @@ with col2:
 
 if arquivo_diario and arquivo_cartas:
     if st.button("Iniciar Auditoria", type="primary"):
-        with st.spinner("Realizando enfrentamento contábil..."):
+        with st.spinner("Realizando auditoria completa..."):
             
             df_diario = processar_livro_diario_excel(arquivo_diario)
             texto_cartas = extrair_texto_pdf(arquivo_cartas)
@@ -145,7 +159,6 @@ if arquivo_diario and arquivo_cartas:
                 for index, row in df_cruzamento.iterrows():
                     titulo = row['Número do Título']
                     
-                    # Lógica para usar o nome do Excel como preferência (mais limpo), ou o da Carta Frete como backup
                     prestador_diario = str(row.get('Prestador_Diario', '')).strip()
                     prestador_carta = str(row.get('Prestador_Carta', '')).strip()
                     
@@ -156,37 +169,51 @@ if arquivo_diario and arquivo_cartas:
                     else:
                         prestador = 'NÃO IDENTIFICADO'
                     
+                    # Variáveis para a prova matemática
+                    bruto = row.get('Valor Bruto (CF)', 0.0)
+                    impostos = row.get('Total Impostos (CF)', 0.0)
+                    saldo_cf = row.get('Saldo a Receber (CF)', 0.0)
+                    valor_diario = row.get('Valor (Diário)', 0.0)
+                    
+                    # Prova real tolerando 1 centavo de diferença (arredondamentos)
+                    matematica_cf_ok = abs((bruto - impostos) - saldo_cf) <= 0.01
+
+                    # Lógica do Veredito (em ordem de gravidade)
                     if pd.isna(row['Valor (Diário)']):
-                        status = 'Erro: Presente na Carta Frete, ausente no Diário'
-                    elif pd.isna(row['Valor (Carta Frete)']):
-                        status = 'Erro: Presente no Diário, Carta Frete ausente'
+                        status = 'ERRO: Presente na Carta Frete, ausente no Diário'
+                    elif pd.isna(row['Saldo a Receber (CF)']):
+                        status = 'ERRO: Presente no Diário, Carta Frete ausente'
                     elif not row['Estrutura OK']:
                         status = 'ERRO CONTÁBIL: Falta Débito (21101) ou Crédito (Banco 11102)'
-                    elif abs(row['Valor (Carta Frete)'] - row['Valor (Diário)']) > 0.01:
-                        status = 'Divergência de Valor'
+                    elif not matematica_cf_ok:
+                        status = f'ERRO NA CF: Bruto (R$ {bruto:.2f}) - Impostos (R$ {impostos:.2f}) não bate com Saldo CF (R$ {saldo_cf:.2f})'
+                    elif abs(saldo_cf - valor_diario) > 0.01:
+                        status = f'DIVERGÊNCIA: Saldo CF (R$ {saldo_cf:.2f}) diferente do Livro Diário (R$ {valor_diario:.2f})'
                     else:
-                        status = 'OK: Lançamento validado (Partidas Dobradas Corretas)'
+                        status = 'OK: Lançamento Validado (Matemática e Contabilidade Exatas)'
                         
                     resultados.append({
                         'Título': titulo,
                         'Prestador': prestador,
-                        'Valor Carta Frete': row.get('Valor (Carta Frete)', 0.0),
-                        'Valor Diário': row.get('Valor (Diário)', 0.0),
+                        'Valor Bruto (CF)': bruto,
+                        'Total Impostos (CF)': impostos,
+                        'Saldo a Receber (CF)': saldo_cf,
+                        'Valor Diário (Excel)': valor_diario,
                         'Status': status
                     })
                 
                 df_resultado = pd.DataFrame(resultados)
                 
                 st.subheader("Resultado da Validação")
-                erros = df_resultado[df_resultado['Status'] != 'OK: Lançamento validado (Partidas Dobradas Corretas)']
-                sucessos = df_resultado[df_resultado['Status'] == 'OK: Lançamento validado (Partidas Dobradas Corretas)']
+                erros = df_resultado[df_resultado['Status'] != 'OK: Lançamento Validado (Matemática e Contabilidade Exatas)']
                 
                 if not erros.empty:
-                    st.warning(f"Atenção: Encontramos {len(erros)} inconsistência(s) que precisam de revisão.")
+                    st.warning(f"Atenção: Encontramos {len(erros)} inconsistência(s) que exigem verificação.")
                     st.dataframe(erros, use_container_width=True)
                 else:
-                    st.success("Auditoria perfeita! Todos os valores e contas contábeis estão batendo.")
+                    st.success("Auditoria Perfeita! Todos os valores, matemáticas e contas contábeis estão exatos.")
                 
+                # Gerar Excel
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_resultado.to_excel(writer, index=False, sheet_name='Auditoria')
