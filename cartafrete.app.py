@@ -27,7 +27,6 @@ def limpar_valor_excel(valor_str):
     if valor_str.lower() in ['nan', 'none', ''] or not valor_str:
         return 0.0
     try:
-        # Limpeza do formato brasileiro (ex: "26.127,64" vira "26127.64")
         return float(valor_str.replace('.', '').replace(',', '.'))
     except:
         return 0.0
@@ -39,7 +38,6 @@ def processar_livro_diario_excel(arquivo_excel):
         st.error(f"Erro ao ler Excel: {e}")
         return pd.DataFrame()
 
-    # Identifica dinamicamente as colunas
     col_hist = next((col for col in df.columns if 'Hist' in str(col)), None)
     col_debito = next((col for col in df.columns if 'Debito' in str(col)), None)
     col_credito = next((col for col in df.columns if 'Credito' in str(col)), None)
@@ -49,7 +47,6 @@ def processar_livro_diario_excel(arquivo_excel):
         st.error("As colunas de Histórico, Débito, Crédito ou Conta Contábil não foram localizadas.")
         return pd.DataFrame()
 
-    # Dicionário para agrupar os lançamentos por título
     lancamentos_agrupados = {}
 
     for index, row in df.iterrows():
@@ -66,19 +63,16 @@ def processar_livro_diario_excel(arquivo_excel):
                     'tem_credito_banco': False
                 }
             
-            # Valida Perna 1: DÉBITO na conta do frete (211010300001)
             if conta.startswith('211010300001'):
                 valor_deb = limpar_valor_excel(row[col_debito])
                 if valor_deb > 0:
                     lancamentos_agrupados[numero_titulo]['debito_frete'] += valor_deb
                     
-            # Valida Perna 2: CRÉDITO em conta de banco sintética (11102)
             if conta.startswith('11102'):
                 valor_cred = limpar_valor_excel(row[col_credito])
                 if valor_cred > 0:
                     lancamentos_agrupados[numero_titulo]['tem_credito_banco'] = True
 
-    # Transforma o dicionário agrupado na tabela final do Python
     lancamentos_finais = []
     for titulo, dados in lancamentos_agrupados.items():
         lancamentos_finais.append({
@@ -99,18 +93,23 @@ def processar_cartas_frete(texto):
             continue
         numero_titulo = match_numero.group(1)
         
+        # Nova Extração: Nome do Prestador
+        match_prestador = re.search(r'CONTRATADO\s+NOME\s*:\s*([^\n]+)', bloco, re.IGNORECASE)
+        prestador = match_prestador.group(1).strip() if match_prestador else "NÃO IDENTIFICADO"
+        
         match_valor = re.search(r'SALDO A RECEBER:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
         valor_liquido = limpar_valor_pdf(match_valor.group(1)) if match_valor else 0.0
         
         cartas.append({
             'Número do Título': numero_titulo,
+            'Prestador': prestador,
             'Valor (Carta Frete)': valor_liquido
         })
         
     return pd.DataFrame(cartas)
 
 st.title("📊 Validador Fiscal: Livro Diário vs. Cartas Frete")
-st.write("Auditoria de Partidas Dobradas e Conciliação de Valores.")
+st.write("Auditoria de Partidas Dobradas, Valores e Prestadores.")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -136,6 +135,7 @@ if arquivo_diario and arquivo_cartas:
                 resultados = []
                 for index, row in df_cruzamento.iterrows():
                     titulo = row['Número do Título']
+                    prestador = row.get('Prestador', 'NÃO IDENTIFICADO (Falta Carta Frete)')
                     
                     if pd.isna(row['Valor (Diário)']):
                         status = 'Erro: Presente na Carta Frete, ausente no Diário'
@@ -150,6 +150,7 @@ if arquivo_diario and arquivo_cartas:
                         
                     resultados.append({
                         'Título': titulo,
+                        'Prestador': prestador,
                         'Valor Carta Frete': row.get('Valor (Carta Frete)', 0.0),
                         'Valor Diário': row.get('Valor (Diário)', 0.0),
                         'Status': status
