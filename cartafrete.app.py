@@ -4,7 +4,69 @@ import re
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Conferencia Contábil - Cartas Frete", layout="wide")
+st.set_page_config(page_title="Validador Fiscal - Cartas Frete", layout="wide")
+
+# ==========================================
+# 1. SISTEMA DE LOGIN (CONTROLE DE ACESSO)
+# ==========================================
+
+# Aqui você cadastra os usuários e senhas (formato -> "usuario": "senha")
+USUARIOS_CADASTRADOS = {
+    "joao.recalcatte": "alfa2026",
+    "edson.reis": "mudar123",
+    "admin": "admin"
+}
+
+def check_password():
+    """Retorna True se o usuário inseriu as credenciais corretas."""
+    def password_entered():
+        # Verifica se o usuário existe e se a senha está correta
+        if st.session_state["username"] in USUARIOS_CADASTRADOS and st.session_state["password"] == USUARIOS_CADASTRADOS[st.session_state["username"]]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Apaga a senha da memória por segurança
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # Primeira tela: Mostra formulário de login
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.title("🔒 Acesso Restrito")
+            st.write("Por favor, faça o login para acessar o Validador Fiscal.")
+            st.text_input("Usuário", key="username")
+            st.text_input("Senha", type="password", key="password")
+            st.button("Entrar", on_click=password_entered, type="primary")
+        return False
+    
+    elif not st.session_state["password_correct"]:
+        # Erro de senha: Mostra o formulário novamente com aviso
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.title("🔒 Acesso Restrito")
+            st.text_input("Usuário", key="username")
+            st.text_input("Senha", type="password", key="password")
+            st.button("Entrar", on_click=password_entered, type="primary")
+            st.error("Usuário ou senha incorretos.")
+        return False
+    
+    else:
+        # Tudo certo, deixa o código seguir
+        return True
+
+# SE O USUÁRIO NÃO PASSAR NO TESTE DE SENHA, O CÓDIGO PARA AQUI
+if not check_password():
+    st.stop()
+
+# Adiciona um botão de Sair na barra lateral
+st.sidebar.success(f"Logado como: {st.session_state['username']}")
+if st.sidebar.button("Sair"):
+    del st.session_state["password_correct"]
+    st.rerun()
+
+
+# ==========================================
+# 2. SISTEMA DO VALIDADOR (SEU CÓDIGO ORIGINAL)
+# ==========================================
 
 def extrair_texto_pdf(arquivo_upload):
     texto_completo = ""
@@ -102,7 +164,6 @@ def processar_cartas_frete(texto):
         match_prestador = re.search(r'CONTRATADO[\s\S]*?NOME[\s\S]*?:\s*([^\n]+)', bloco, re.IGNORECASE)
         prestador_pdf = match_prestador.group(1).strip() if match_prestador else ""
         
-        # Extração de todos os valores financeiros
         match_bruto = re.search(r'VALOR BRUTO:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
         valor_bruto = limpar_valor_pdf(match_bruto.group(1)) if match_bruto else 0.0
         
@@ -131,7 +192,7 @@ def processar_cartas_frete(texto):
         
     return pd.DataFrame(cartas)
 
-st.title("📊 Conferencia Contábil: Livro Diário vs. Cartas Frete")
+st.title("📊 Validador Fiscal: Livro Diário vs. Cartas Frete")
 st.write("Auditoria de Partidas Dobradas, Valores, Impostos e Prestadores.")
 
 col1, col2 = st.columns(2)
@@ -169,16 +230,13 @@ if arquivo_diario and arquivo_cartas:
                     else:
                         prestador = 'NÃO IDENTIFICADO'
                     
-                    # Variáveis para a prova matemática
                     bruto = row.get('Valor Bruto (CF)', 0.0)
                     impostos = row.get('Total Impostos (CF)', 0.0)
                     saldo_cf = row.get('Saldo a Receber (CF)', 0.0)
                     valor_diario = row.get('Valor (Diário)', 0.0)
                     
-                    # Prova real tolerando 1 centavo de diferença (arredondamentos)
                     matematica_cf_ok = abs((bruto - impostos) - saldo_cf) <= 0.01
 
-                    # Lógica do Veredito (em ordem de gravidade)
                     if pd.isna(row['Valor (Diário)']):
                         status = 'ERRO: Presente na Carta Frete, ausente no Diário'
                     elif pd.isna(row['Saldo a Receber (CF)']):
@@ -213,7 +271,6 @@ if arquivo_diario and arquivo_cartas:
                 else:
                     st.success("Auditoria Perfeita! Todos os valores, matemáticas e contas contábeis estão exatos.")
                 
-                # Gerar Excel
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_resultado.to_excel(writer, index=False, sheet_name='Auditoria')
