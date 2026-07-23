@@ -4,7 +4,7 @@ import re
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Validador Fiscal - Cartas Frete", layout="wide")
+st.set_page_config(page_title="Conferencia Diario - Cartas Frete", layout="wide")
 
 def extrair_texto_pdf(arquivo_upload):
     texto_completo = ""
@@ -22,33 +22,43 @@ def limpar_valor(valor_str):
     if not valor_str: return 0.0
     return float(valor_str.replace('.', '').replace(',', '.'))
 
-def processar_livro_diario(texto):
+def processar_livro_diario_excel(arquivo_excel):
+    try:
+        # Lê o Excel sem focar em cabeçalhos, para varrer todas as células
+        df = pd.read_excel(arquivo_excel, header=None)
+    except Exception as e:
+        st.error(f"Erro ao ler Excel: {e}")
+        return pd.DataFrame()
+
     lancamentos = []
     
-    # Busca todas as ocorrências de PAGO CF ou PAGO CE em todo o texto contínuo
-    matches = re.finditer(r'PAGO\s*C[FE]\s*(\d+)', texto, re.IGNORECASE)
-    
-    for match in matches:
-        numero_titulo = match.group(1)
+    for index, row in df.iterrows():
+        # Junta o texto da linha inteira para achar o histórico "PAGO CF"
+        linha_str = ' '.join([str(val) for val in row if pd.notna(val)])
         
-        # Isola os próximos 150 caracteres logo após o número do título
-        trecho_frente = texto[match.end():match.end()+150]
+        match_cf = re.search(r'PAGO\s*C[FE]\s*(\d+)', linha_str, re.IGNORECASE)
         
-        # Busca o primeiro valor financeiro (padrão de milhares e decimais) nesse trecho
-        match_valor = re.search(r'(\d{1,3}(?:\.\d{3})*,\d{2})', trecho_frente)
-        valor = limpar_valor(match_valor.group(1)) if match_valor else 0.0
-        
-        lancamentos.append({
-            'Número do Título': numero_titulo,
-            'Valor (Diário)': valor
-        })
+        if match_cf:
+            numero_titulo = match_cf.group(1)
             
-    return pd.DataFrame(lancamentos).drop_duplicates('Número do Título')
+            # Encontra automaticamente as colunas que possuem valores financeiros (Débito/Crédito)
+            valores_numericos = [val for val in row if isinstance(val, (int, float))]
+            
+            if valores_numericos:
+                # Captura o maior valor absoluto daquela linha
+                valor = max([abs(v) for v in valores_numericos])
+            else:
+                valor = 0.0
+                
+            lancamentos.append({
+                'Número do Título': numero_titulo,
+                'Valor (Diário)': float(valor)
+            })
+            
     return pd.DataFrame(lancamentos).drop_duplicates('Número do Título')
 
 def processar_cartas_frete(texto):
     cartas = []
-    # Usando split mais seguro
     blocos = re.split(r'CONTRATO DE TRANSPORTES', texto, flags=re.IGNORECASE)
     
     for bloco in blocos:
@@ -68,39 +78,28 @@ def processar_cartas_frete(texto):
     return pd.DataFrame(cartas)
 
 st.title("📊 Validador Fiscal: Livro Diário vs. Cartas Frete")
-st.write("Faça o upload dos documentos para iniciar a conciliação.")
+st.write("Faça o upload do Livro Diário (Excel) e das Cartas Frete (PDF).")
 
 col1, col2 = st.columns(2)
 with col1:
-    arquivo_diario = st.file_uploader("Upload do Livro Diário (PDF)", type=['pdf'])
+    # Atualizado para aceitar formatos do Excel
+    arquivo_diario = st.file_uploader("Upload do Livro Diário (Excel)", type=['xlsx', 'xls'])
 with col2:
     arquivo_cartas = st.file_uploader("Upload das Cartas Frete (PDF)", type=['pdf'])
 
-# Nova ferramenta de diagnóstico visual
-mostrar_debug = st.checkbox("Modo de Depuração (Mostrar texto extraído dos PDFs)")
-
 if arquivo_diario and arquivo_cartas:
     if st.button("Iniciar Conferência", type="primary"):
-        with st.spinner("Analisando documentos..."):
+        with st.spinner("Cruzando dados fiscais..."):
             
-            texto_diario = extrair_texto_pdf(arquivo_diario)
+            df_diario = processar_livro_diario_excel(arquivo_diario)
+            
             texto_cartas = extrair_texto_pdf(arquivo_cartas)
-            
-            if mostrar_debug:
-                with st.expander("Ver texto extraído do Livro Diário"):
-                    st.text(texto_diario[:2000]) # Mostra os primeiros 2000 caracteres
-                with st.expander("Ver texto extraído das Cartas Frete"):
-                    st.text(texto_cartas[:2000])
-
-            df_diario = processar_livro_diario(texto_diario)
             df_cartas = processar_cartas_frete(texto_cartas)
             
-            if df_diario.empty and df_cartas.empty:
-                st.error("Não foi possível extrair dados de NENHUM dos documentos. Ative o Modo de Depuração acima para ver como o sistema está lendo os arquivos.")
-            elif df_diario.empty:
-                st.error("Dados extraídos das Cartas Frete, mas o LIVRO DIÁRIO falhou. Ative o Modo de Depuração.")
+            if df_diario.empty:
+                st.error("Não foi possível localizar lançamentos 'PAGO CF' no arquivo Excel enviado.")
             elif df_cartas.empty:
-                st.error("Dados extraídos do Livro Diário, mas as CARTAS FRETE falharam. Ative o Modo de Depuração.")
+                st.error("Falha ao extrair dados dos PDFs das Cartas Frete.")
             else:
                 df_cruzamento = pd.merge(df_cartas, df_diario, on='Número do Título', how='outer')
                 
