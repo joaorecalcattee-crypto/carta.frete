@@ -4,7 +4,7 @@ import re
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Validador Fiscal - Cartas Frete", layout="wide")
+st.set_page_config(page_title="Conferencia Contábil - Cartas Frete", layout="wide")
 
 # ==========================================
 # 1. SISTEMA DE LOGIN (CONTROLE DE ACESSO)
@@ -196,7 +196,7 @@ def processar_cartas_frete(texto):
         
     return pd.DataFrame(cartas)
 
-st.title("📊 Validador Fiscal: Livro Diário vs. Cartas Frete")
+st.title("📊 Conferencia Contabil: Livro Diário vs. Cartas Frete")
 st.write("Auditoria de Partidas Dobradas, Valores, Impostos e Prestadores.")
 
 col1, col2 = st.columns(2)
