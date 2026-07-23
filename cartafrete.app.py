@@ -36,7 +36,7 @@ def check_password():
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.title("🔒 Acesso Restrito")
-            st.write("Por favor, faça o login para acessar o Validador Fiscal.")
+            st.write("Por favor, faça o login para acessar o Sistema.")
             st.text_input("Usuário", key="username")
             st.text_input("Senha", type="password", key="password")
             st.button("Entrar", on_click=password_entered, type="primary")
