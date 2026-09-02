@@ -1,60 +1,58 @@
 import streamlit as st
-import pdfplumber
-import re
 import pandas as pd
+import re
 import io
 
-st.set_page_config(page_title="Conferencia Contábil - Cartas Frete", layout="wide")
+st.set_page_config(page_title="Auditoria: Diário vs Relatório CF", layout="wide")
 
 # ==========================================
-# SISTEMA DO VALIDADOR
+# FUNÇÕES DE TRATAMENTO
 # ==========================================
-
-def extrair_texto_pdf(arquivo_upload):
-    texto_completo = ""
-    try:
-        with pdfplumber.open(arquivo_upload) as pdf:
-            for pagina in pdf.pages:
-                texto = pagina.extract_text()
-                if texto:
-                    texto_completo += texto + "\n"
-    except Exception as e:
-        st.error(f"Erro ao ler PDF: {e}")
-    return texto_completo
-
-def limpar_valor_pdf(valor_str):
-    if not valor_str: return 0.0
-    return float(valor_str.replace('.', '').replace(',', '.'))
 
 def limpar_valor_excel(valor_str):
-    valor_str = str(valor_str).strip()
-    if valor_str.lower() in ['nan', 'none', ''] or not valor_str:
+    """Converte valores das planilhas para número (float) de forma segura."""
+    if pd.isna(valor_str) or valor_str == '':
         return 0.0
+    if isinstance(valor_str, (int, float)):
+        return float(valor_str)
+    
+    valor_str = str(valor_str).strip()
     try:
-        return float(valor_str.replace('.', '').replace(',', '.'))
+        # Se o formato já estiver com ponto como decimal (ex: 1500.50)
+        if '.' in valor_str and ',' not in valor_str:
+            return float(valor_str)
+        # Se for formato brasileiro (ex: 1.500,50)
+        valor_str = valor_str.replace('.', '').replace(',', '.')
+        return float(valor_str)
     except:
         return 0.0
 
-def processar_livro_diario_excel(arquivo_excel):
+def processar_livro_diario(arquivo):
+    """Lê o Livro Diário e extrai os lançamentos baseados no Histórico."""
     try:
-        df = pd.read_excel(arquivo_excel)
+        if arquivo.name.endswith('.csv'):
+            df = pd.read_csv(arquivo, sep=None, engine='python')
+        else:
+            df = pd.read_excel(arquivo)
     except Exception as e:
-        st.error(f"Erro ao ler Excel: {e}")
+        st.error(f"Erro ao ler Livro Diário: {e}")
         return pd.DataFrame()
 
+    # Identificar colunas do Livro Diário
     col_hist = next((col for col in df.columns if 'Hist' in str(col)), None)
-    col_debito = next((col for col in df.columns if 'Debito' in str(col)), None)
-    col_credito = next((col for col in df.columns if 'Credito' in str(col)), None)
+    col_debito = next((col for col in df.columns if 'Debito' in str(col) or 'Débito' in str(col)), None)
+    col_credito = next((col for col in df.columns if 'Credito' in str(col) or 'Crédito' in str(col)), None)
     col_conta = next((col for col in df.columns if 'Conta' in str(col)), None)
 
     if not col_hist or not col_debito or not col_credito or not col_conta:
-        st.error("As colunas de Histórico, Débito, Crédito ou Conta Contábil não foram localizadas.")
+        st.error("Erro no Livro Diário: Não achei as colunas Histórico, Débito, Crédito ou Conta.")
         return pd.DataFrame()
 
     lancamentos_agrupados = {}
 
     for index, row in df.iterrows():
         historico = str(row[col_hist])
+        # Puxa o número da CF que está no histórico
         match_cf = re.search(r'PAGO\s*C[FE]\s*(\d+)(?:\s*-\s*(.+))?', historico, re.IGNORECASE)
         
         if match_cf:
@@ -64,19 +62,21 @@ def processar_livro_diario_excel(arquivo_excel):
             
             if numero_titulo not in lancamentos_agrupados:
                 lancamentos_agrupados[numero_titulo] = {
-                    'debito_frete': 0.0,
+                    'Valor (Diário)': 0.0,
                     'tem_credito_banco': False,
-                    'prestador': prestador_excel
+                    'Prestador (Diário)': prestador_excel
                 }
             
-            if not lancamentos_agrupados[numero_titulo]['prestador'] and prestador_excel:
-                lancamentos_agrupados[numero_titulo]['prestador'] = prestador_excel
+            if not lancamentos_agrupados[numero_titulo]['Prestador (Diário)'] and prestador_excel:
+                lancamentos_agrupados[numero_titulo]['Prestador (Diário)'] = prestador_excel
             
+            # Conta de Despesa de Frete (Ajuste conforme seu plano de contas)
             if conta.startswith('211010300001'):
                 valor_deb = limpar_valor_excel(row[col_debito])
                 if valor_deb > 0:
-                    lancamentos_agrupados[numero_titulo]['debito_frete'] += valor_deb
+                    lancamentos_agrupados[numero_titulo]['Valor (Diário)'] += valor_deb
                     
+            # Conta de Banco
             if conta.startswith('11102'):
                 valor_cred = limpar_valor_excel(row[col_credito])
                 if valor_cred > 0:
@@ -86,140 +86,149 @@ def processar_livro_diario_excel(arquivo_excel):
     for titulo, dados in lancamentos_agrupados.items():
         lancamentos_finais.append({
             'Número do Título': titulo,
-            'Prestador_Diario': dados['prestador'],
-            'Valor (Diário)': dados['debito_frete'],
-            'Estrutura OK': dados['tem_credito_banco'] and (dados['debito_frete'] > 0)
+            'Prestador (Diário)': dados['Prestador (Diário)'],
+            'Valor (Diário)': dados['Valor (Diário)'],
+            'Estrutura OK': dados['tem_credito_banco'] and (dados['Valor (Diário)'] > 0)
         })
             
     return pd.DataFrame(lancamentos_finais)
 
-def processar_cartas_frete(texto):
-    cartas = []
-    blocos = re.split(r'CONTRATO DE TRANSPORTES', texto, flags=re.IGNORECASE)
-    
-    for bloco in blocos:
-        match_numero = re.search(r'N[UÚ]MERO:\s*(\d+)', bloco, re.IGNORECASE)
-        if not match_numero:
-            continue
-        numero_titulo = match_numero.group(1)
-        
-        match_prestador = re.search(r'CONTRATADO[\s\S]*?NOME[\s\S]*?:\s*([^\n]+)', bloco, re.IGNORECASE)
-        prestador_pdf = match_prestador.group(1).strip() if match_prestador else ""
-        
-        match_bruto = re.search(r'VALOR BRUTO:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
-        valor_bruto = limpar_valor_pdf(match_bruto.group(1)) if match_bruto else 0.0
-        
-        match_inss = re.search(r'INSS:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
-        inss = limpar_valor_pdf(match_inss.group(1)) if match_inss else 0.0
-        
-        match_ir = re.search(r'IR:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
-        ir = limpar_valor_pdf(match_ir.group(1)) if match_ir else 0.0
-        
-        match_sest = re.search(r'SEST:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
-        sest = limpar_valor_pdf(match_sest.group(1)) if match_sest else 0.0
-        
-        match_saldo = re.search(r'SALDO A RECEBER:\s*R\$\s*([\d\.,]+)', bloco, re.IGNORECASE)
-        saldo_receber = limpar_valor_pdf(match_saldo.group(1)) if match_saldo else 0.0
-        
-        cartas.append({
-            'Número do Título': numero_titulo,
-            'Prestador_Carta': prestador_pdf,
-            'Valor Bruto (CF)': valor_bruto,
-            'Total Impostos (CF)': inss + ir + sest,
-            'INSS': inss,
-            'IR': ir,
-            'SEST': sest,
-            'Saldo a Receber (CF)': saldo_receber
-        })
-        
-    return pd.DataFrame(cartas)
+def processar_relatorio_cf(arquivo):
+    """Lê o relatório das Cartas Frete e extrai número, prestador e valor."""
+    try:
+        if arquivo.name.endswith('.csv'):
+            df = pd.read_csv(arquivo, sep=None, engine='python')
+        else:
+            df = pd.read_excel(arquivo)
+    except Exception as e:
+        st.error(f"Erro ao ler Relatório CF: {e}")
+        return pd.DataFrame()
 
-st.title("📊 Conferencia Contabil: Livro Diário vs. Cartas Frete")
-st.write("Auditoria de Partidas Dobradas, Valores, Impostos e Prestadores.")
+    # Tenta achar a coluna que contém o Número da Carta Frete
+    col_num = next((c for c in df.columns if any(x in str(c).lower() for x in ['número', 'numero', 'título', 'titulo', 'documento', 'cf'])), None)
+    # Tenta achar a coluna de Valor
+    col_valor = next((c for c in df.columns if any(x in str(c).lower() for x in ['valor', 'líquido', 'liquido', 'saldo', 'receber', 'total'])), None)
+    # Tenta achar a coluna de Prestador/Motorista
+    col_prestador = next((c for c in df.columns if any(x in str(c).lower() for x in ['prestador', 'motorista', 'nome', 'contratado', 'favorecido'])), None)
+
+    if not col_num or not col_valor:
+        st.error("Erro no Relatório CF: Não consegui identificar as colunas de 'Número' ou 'Valor'. Verifique o cabeçalho da planilha.")
+        st.write("Colunas encontradas no arquivo:", list(df.columns))
+        return pd.DataFrame()
+
+    # Extrai apenas os números da coluna de Título (caso tenha letras junto)
+    df['Número do Título'] = df[col_num].astype(str).str.extract(r'(\d+)')
+    df['Valor (Relatório CF)'] = df[col_valor].apply(limpar_valor_excel)
+    df['Prestador (Relatório CF)'] = df[col_prestador].astype(str) if col_prestador else "N/A"
+
+    # Remove linhas vazias
+    df = df.dropna(subset=['Número do Título'])
+    
+    # Agrupa caso o mesmo título apareça em mais de uma linha no relatório (soma os valores)
+    df_agrupado = df.groupby('Número do Título').agg({
+        'Valor (Relatório CF)': 'sum',
+        'Prestador (Relatório CF)': 'first'
+    }).reset_index()
+
+    return df_agrupado
+
+# ==========================================
+# INTERFACE DO USUÁRIO
+# ==========================================
+
+st.title("📊 Comparador: Livro Diário vs Relatório de Carta Frete")
+st.write("Cruza os dados de dois relatórios Excel/CSV para encontrar divergências de valores ou lançamentos faltantes.")
 
 col1, col2 = st.columns(2)
 with col1:
-    arquivo_diario = st.file_uploader("Upload do Livro Diário (Excel)", type=['xlsx', 'xls'])
+    arquivo_diario = st.file_uploader("1️⃣ Upload do Livro Diário (Excel/CSV)", type=['xlsx', 'xls', 'csv'])
 with col2:
-    arquivo_cartas = st.file_uploader("Upload das Cartas Frete (PDF)", type=['pdf'])
+    arquivo_relatorio_cf = st.file_uploader("2️⃣ Upload do Relatório Carta Frete (Excel/CSV)", type=['xlsx', 'xls', 'csv'])
 
-if arquivo_diario and arquivo_cartas:
-    if st.button("Iniciar Auditoria", type="primary"):
-        with st.spinner("Realizando auditoria completa..."):
+if arquivo_diario and arquivo_relatorio_cf:
+    if st.button("Iniciar Comparação", type="primary"):
+        with st.spinner("Processando planilhas e cruzando dados..."):
             
-            df_diario = processar_livro_diario_excel(arquivo_diario)
-            texto_cartas = extrair_texto_pdf(arquivo_cartas)
-            df_cartas = processar_cartas_frete(texto_cartas)
+            df_diario = processar_livro_diario(arquivo_diario)
+            df_cf = processar_relatorio_cf(arquivo_relatorio_cf)
             
             if df_diario.empty:
-                st.error("Nenhum lançamento válido encontrado no Excel do Livro Diário.")
-            elif df_cartas.empty:
-                st.error("Nenhuma Carta Frete identificada nos PDFs.")
+                st.warning("O processamento do Livro Diário não retornou resultados válidos.")
+            elif df_cf.empty:
+                st.warning("O processamento do Relatório de Carta Frete não retornou resultados válidos.")
             else:
-                df_cruzamento = pd.merge(df_cartas, df_diario, on='Número do Título', how='outer')
+                # Cruza as duas tabelas usando o Número do Título
+                df_cruzamento = pd.merge(df_cf, df_diario, on='Número do Título', how='outer')
                 
                 resultados = []
                 for index, row in df_cruzamento.iterrows():
                     titulo = row['Número do Título']
                     
-                    prestador_diario = str(row.get('Prestador_Diario', '')).strip()
-                    prestador_carta = str(row.get('Prestador_Carta', '')).strip()
-                    
-                    if prestador_diario and prestador_diario.lower() != 'nan':
-                        prestador = prestador_diario
-                    elif prestador_carta and prestador_carta.lower() != 'nan':
-                        prestador = prestador_carta
-                    else:
-                        prestador = 'NÃO IDENTIFICADO'
-                    
-                    bruto = row.get('Valor Bruto (CF)', 0.0)
-                    impostos = row.get('Total Impostos (CF)', 0.0)
-                    saldo_cf = row.get('Saldo a Receber (CF)', 0.0)
+                    valor_cf = row.get('Valor (Relatório CF)', 0.0)
                     valor_diario = row.get('Valor (Diário)', 0.0)
-                    
-                    matematica_cf_ok = abs((bruto - impostos) - saldo_cf) <= 0.01
+                    if pd.isna(valor_cf): valor_cf = 0.0
+                    if pd.isna(valor_diario): valor_diario = 0.0
 
-                    if pd.isna(row['Valor (Diário)']):
-                        status = 'ERRO: Presente na Carta Frete, ausente no Diário'
-                    elif pd.isna(row['Saldo a Receber (CF)']):
-                        status = 'ERRO: Presente no Diário, Carta Frete ausente'
-                    elif not row['Estrutura OK']:
-                        status = 'ERRO CONTÁBIL: Falta Débito (21101) ou Crédito (Banco 11102)'
-                    elif not matematica_cf_ok:
-                        status = f'ERRO NA CF: Bruto (R$ {bruto:.2f}) - Impostos (R$ {impostos:.2f}) não bate com Saldo CF (R$ {saldo_cf:.2f})'
-                    elif abs(saldo_cf - valor_diario) > 0.01:
-                        status = f'DIVERGÊNCIA: Saldo CF (R$ {saldo_cf:.2f}) diferente do Livro Diário (R$ {valor_diario:.2f})'
+                    prestador = row.get('Prestador (Relatório CF)', row.get('Prestador (Diário)', 'NÃO IDENTIFICADO'))
+                    if pd.isna(prestador) or prestador == 'nan': 
+                        prestador = row.get('Prestador (Diário)', 'NÃO IDENTIFICADO')
+
+                    # Regras de Status
+                    if pd.isna(row.get('Valor (Diário)')):
+                        status = '❌ ERRO: Presente no Relatório CF, mas não achado no Diário'
+                    elif pd.isna(row.get('Valor (Relatório CF)')):
+                        status = '❌ ERRO: Lançado no Diário, mas não está no Relatório CF'
+                    elif not row.get('Estrutura OK', True):
+                        status = '⚠️ ALERTA CONTÁBIL: Falta Débito (21101) ou Crédito (Banco 11102)'
+                    elif abs(valor_cf - valor_diario) > 0.02: # Margem de erro de 2 centavos
+                        status = f'⚠️ DIVERGÊNCIA DE VALOR: CF (R$ {valor_cf:.2f}) x Diário (R$ {valor_diario:.2f})'
                     else:
-                        status = 'OK: Lançamento Validado (Matemática e Contabilidade Exatas)'
+                        status = '✅ OK: Valores batem perfeitamente'
                         
                     resultados.append({
-                        'Título': titulo,
+                        'Número da CF': titulo,
                         'Prestador': prestador,
-                        'Valor Bruto (CF)': bruto,
-                        'Total Impostos (CF)': impostos,
-                        'Saldo a Receber (CF)': saldo_cf,
-                        'Valor Diário (Excel)': valor_diario,
+                        'Valor Relatório CF': valor_cf,
+                        'Valor Contabilidade (Diário)': valor_diario,
+                        'Diferença (R$)': abs(valor_cf - valor_diario),
                         'Status': status
                     })
                 
                 df_resultado = pd.DataFrame(resultados)
                 
-                st.subheader("Resultado da Validação")
-                erros = df_resultado[df_resultado['Status'] != 'OK: Lançamento Validado (Matemática e Contabilidade Exatas)']
+                # Exibir as métricas de resumo
+                st.subheader("Resumo da Auditoria")
+                erros = df_resultado[~df_resultado['Status'].str.contains('✅ OK')]
                 
+                metrica1, metrica2, metrica3 = st.columns(3)
+                metrica1.metric("Total de CFs Analisadas", len(df_resultado))
+                metrica2.metric("Lançamentos Corretos", len(df_resultado) - len(erros))
+                metrica3.metric("Divergências Encontradas", len(erros))
+
+                # Exibir tabela na tela
                 if not erros.empty:
-                    st.warning(f"Atenção: Encontramos {len(erros)} inconsistência(s) que exigem verificação.")
+                    st.error("As seguintes inconsistências foram encontradas:")
+                    # Destacar visualmente no dataframe
                     st.dataframe(erros, use_container_width=True)
                 else:
-                    st.success("Auditoria Perfeita! Todos os valores, matemáticas e contas contábeis estão exatos.")
+                    st.success("Tudo certo! As duas planilhas estão perfeitamente alinhadas.")
                 
+                # Aba de download do Excel final
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    df_resultado.to_excel(writer, index=False, sheet_name='Auditoria')
+                    df_resultado.to_excel(writer, index=False, sheet_name='Cruzamento')
+                    # Configurar largura das colunas no Excel
+                    worksheet = writer.sheets['Cruzamento']
+                    worksheet.set_column('A:A', 15)
+                    worksheet.set_column('B:B', 30)
+                    worksheet.set_column('C:E', 20)
+                    worksheet.set_column('F:F', 50)
                 
+                st.write("---")
                 st.download_button(
-                    label="Baixar Relatório Completo (Excel)",
+                    label="📥 Baixar Relatório do Cruzamento (Excel)",
                     data=buffer.getvalue(),
-                    file_name="relatorio_auditoria_fretes.xlsx",
-                    mime="application/vnd.ms-excel"
+                    file_name="cruzamento_diario_vs_relatorioCF.xlsx",
+                    mime="application/vnd.ms-excel",
+                    type="primary"
                 )
