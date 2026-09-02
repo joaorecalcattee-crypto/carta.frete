@@ -7,69 +7,7 @@ import io
 st.set_page_config(page_title="Conferencia Contábil - Cartas Frete", layout="wide")
 
 # ==========================================
-# 1. SISTEMA DE LOGIN (CONTROLE DE ACESSO)
-# ==========================================
-
-# Aqui você cadastra os usuários e senhas (formato -> "usuario": "senha")
-USUARIOS_CADASTRADOS = {
-    "joao.recalcatte": "alfa2026",
-    "edson.reis": "mudar123",
-    "admin": "admin"
-}
-
-def check_password():
-    """Retorna True se o usuário inseriu as credenciais corretas."""
-    def password_entered():
-        # Verifica se o usuário existe e se a senha está correta
-        if st.session_state["username"] in USUARIOS_CADASTRADOS and st.session_state["password"] == USUARIOS_CADASTRADOS[st.session_state["username"]]:
-            st.session_state["password_correct"] = True
-            
-            # CORREÇÃO: Salva o nome em uma variável que não será apagada quando o campo sumir
-            st.session_state["usuario_logado"] = st.session_state["username"] 
-            
-            del st.session_state["password"]  # Apaga a senha da memória por segurança
-        else:
-            st.session_state["password_correct"] = False
-
-    if "password_correct" not in st.session_state:
-        # Primeira tela: Mostra formulário de login
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.title("🔒 Acesso Restrito")
-            st.write("Por favor, faça o login para acessar o Sistema.")
-            st.text_input("Usuário", key="username")
-            st.text_input("Senha", type="password", key="password")
-            st.button("Entrar", on_click=password_entered, type="primary")
-        return False
-    
-    elif not st.session_state["password_correct"]:
-        # Erro de senha: Mostra o formulário novamente com aviso
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.title("🔒 Acesso Restrito")
-            st.text_input("Usuário", key="username")
-            st.text_input("Senha", type="password", key="password")
-            st.button("Entrar", on_click=password_entered, type="primary")
-            st.error("Usuário ou senha incorretos.")
-        return False
-    
-    else:
-        # Tudo certo, deixa o código seguir
-        return True
-
-# SE O USUÁRIO NÃO PASSAR NO TESTE DE SENHA, O CÓDIGO PARA AQUI
-if not check_password():
-    st.stop()
-
-# Adiciona um botão de Sair na barra lateral usando a nova variável salva
-st.sidebar.success(f"Logado como: {st.session_state['usuario_logado']}")
-if st.sidebar.button("Sair"):
-    del st.session_state["password_correct"]
-    del st.session_state["usuario_logado"]
-    st.rerun()
-
-# ==========================================
-# 2. SISTEMA DO VALIDADOR (COMEÇA AQUI O RESTO DO SEU CÓDIGO)
+# SISTEMA DO VALIDADOR
 # ==========================================
 
 def extrair_texto_pdf(arquivo_upload):
